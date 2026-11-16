@@ -1,0 +1,216 @@
+# Render Blueprint: API (Django + gunicorn), static frontend and managed PostgreSQL 16.
+# The static site proxies /api to the API service (same origin: the refresh cookie is first-party).
+# If you rename the API service, update that rewrite and CORS_ALLOWED_ORIGINS (README → Despliegue).
+services:
+  - type: web
+    name: entrenanutricion-api
+    runtime: python
+    rootDir: backend
+    region: frankfurt
+    plan: starter # pre-deploy commands need a paid instance type
+    # requirements.txt is a lock with the hashes of every file (generated from requirements.in).
+    buildCommand: "pip install --require-hashes --only-binary=:all: -r requirements.txt && python manage.py collectstatic --noinput"
+    preDeployCommand: python manage.py migrate --noinput
+    # Port ($PORT), workers ($WEB_CONCURRENCY) and an access log without query strings nor
+    # referrers: backend/gunicorn.conf.py.
+    startCommand: gunicorn config.wsgi:application
+    healthCheckPath: /api/v1/health
+    envVars:
+      # Same exact versions as the Docker images and the CI.
+      - key: PYTHON_VERSION
+        value: "3.12.16"
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.prod
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: entrenanutricion-db
+          property: connectionString
+      # RENDER_EXTERNAL_HOSTNAME is added automatically; list extra domains here.
+      - key: ALLOWED_HOSTS
+        value: ""
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://entrenanutricion-web.onrender.com
+      # Render's proxy appends the client address to X-Forwarded-For (rate limits per client).
+      - key: NUM_PROXIES
+        value: "1"
+      - key: WEB_CONCURRENCY
+        value: "3"
+      - key: TIME_ZONE
+        value: Europe/Madrid
+      # Media files in a private Google Cloud Storage bucket with signed URLs.
+      - key: USE_GCS
+        value: "1"
+      - key: GS_BUCKET_NAME
+        sync: false
+      - fromGroup: entrenanutricion-gcs
+      - key: GS_EXPIRATION_MINUTES
+        value: "15"
+      # Emails (sign-up confirmation, password recovery): their links point to the static site.
+      # SMTP from the entrenanutricion-smtp group; production refuses to print them in the logs.
+      - key: FRONTEND_URL
+        value: https://entrenanutricion-web.onrender.com
+      - fromGroup: entrenanutricion-smtp
+      - key: DEFAULT_FROM_EMAIL
+        value: entrenanutricion <no-reply@entrenanutricion.dev>
+      # Error monitoring (optional): add SENTRY_DSN in the dashboard to turn it on.
+      - key: SENTRY_ENVIRONMENT
+        value: production
+
+  - type: web
+    name: entrenanutricion-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: "24.22.2"
+      # Same origin thanks to the /api rewrite below.
+      - key: VITE_API_URL
+        value: /api/v1
+      # Privacy policy: the data controller (name and ID) and the privacy contact email.
+      - key: VITE_PRIVACY_CONTROLLER
+        sync: false
+      - key: VITE_PRIVACY_CONTACT
+        sync: false
+      # Error monitoring (optional): add VITE_SENTRY_DSN in the dashboard and redeploy.
+      - key: VITE_SENTRY_ENVIRONMENT
+        value: production
+    headers:
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://storage.googleapis.com; media-src 'self' blob: https://storage.googleapis.com; font-src 'self' data:; connect-src 'self' https://*.ingest.sentry.io https://*.ingest.de.sentry.io; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+      - path: /*
+        name: X-Content-Type-Options
+        value: "nosniff"
+      - path: /*
+        name: Referrer-Policy
+        value: "same-origin"
+      - path: /*
+        name: X-Frame-Options
+        value: "DENY"
+      - path: /*
+        name: Permissions-Policy
+        value: "camera=(), microphone=(), geolocation=()"
+      # HTTPS only from the first visit on (STRICT_TRANSPORT_SECURITY in security-headers.ts).
+      - path: /*
+        name: Strict-Transport-Security
+        value: "max-age=31536000; includeSubDomains"
+    routes:
+      # The API, proxied under the app's own origin (must come before the SPA fallback).
+      - type: rewrite
+        source: /api/*
+        destination: https://entrenanutricion-api.onrender.com/api/*
+      # SPA: every route that is not a file is served by index.html.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # Nightly: logical backup (pg_dump) to a private bucket, then the retention policy (accounts
+  # deactivated more than a year ago, with their files). Restore procedures: docs/OPERATIONS.md.
+  - type: cron
+    name: entrenanutricion-backup
+    runtime: docker
+    region: frankfurt
+    plan: starter
+    schedule: "30 2 * * *" # 02:30 UTC
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: sh -c "python manage.py backup_database && python manage.py purge_inactive_accounts"
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.prod
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: entrenanutricion-db
+          property: connectionString
+      # The dumps: their own service account, which can only create objects in that bucket. The
+      # bucket deletes them after 14 days (lifecycle rule) and keeps them locked until then.
+      - key: GS_BACKUP_BUCKET_NAME
+        sync: false
+      - key: GS_BACKUP_CREDENTIALS_JSON
+        sync: false
+      - key: BACKUP_PRUNE
+        value: "0"
+      - key: BACKUP_RETENTION_DAYS
+        value: "14"
+      # The retention policy deletes the photos of the accounts too: same media bucket as the API.
+      - key: ACCOUNT_RETENTION_DAYS
+        value: "365"
+      - key: USE_GCS
+        value: "1"
+      - key: GS_BUCKET_NAME
+        sync: false
+      - fromGroup: entrenanutricion-gcs
+
+  # Hourly: training reminders by email (opt-in per client, at most one a day, within the hour
+  # before each client's training time). Same email settings as the API.
+  - type: cron
+    name: entrenanutricion-reminders
+    runtime: docker
+    region: frankfurt
+    plan: starter
+    schedule: "0 * * * *"
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: python manage.py send_training_reminders
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.prod
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: entrenanutricion-db
+          property: connectionString
+      - key: TIME_ZONE
+        value: Europe/Madrid
+      - key: FRONTEND_URL
+        value: https://entrenanutricion-web.onrender.com
+      - fromGroup: entrenanutricion-smtp
+      - key: DEFAULT_FROM_EMAIL
+        value: entrenanutricion <no-reply@entrenanutricion.dev>
+      - key: REMINDER_LEAD_MINUTES
+        value: "60"
+
+envVarGroups:
+  # Service account key (one-line JSON) of the media bucket: the API and the retention policy.
+  - name: entrenanutricion-gcs
+    envVars:
+      - key: GS_CREDENTIALS_JSON
+        sync: false
+  # SMTP server of the API and the reminders. Without one, production does not start unless
+  # ALLOW_CONSOLE_EMAIL=1 (test environments only: the links of the emails end up in the logs).
+  - name: entrenanutricion-smtp
+    envVars:
+      - key: EMAIL_BACKEND
+        value: django.core.mail.backends.smtp.EmailBackend
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_USE_TLS
+        value: "1"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+
+databases:
+  - name: entrenanutricion-db
+    region: frankfurt
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+    databaseName: entrenanutricion
+    user: entrenanutricion
+    ipAllowList: [] # only reachable from Render services

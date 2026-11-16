@@ -1,0 +1,90 @@
+# Weekly dependency updates. The cooldown keeps the rule of the project: only versions published
+# at least two weeks ago (security updates are not delayed).
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 14 }
+    groups:
+      backend-minor:
+        update-types: [minor, patch]
+    commit-message: { prefix: "chore(deps)" }
+    # Its PRs regenerate requirements*.txt for Linux only: before merging, regenerate the locks with
+    # the uv command of the README (the Windows-only packages are pinned in the .in files).
+    ignore:
+      # Django stays on the 5.2 LTS (security fixes until April 2028); the next LTS, 6.2 (April
+      # 2027), is a planned upgrade, not a weekly one.
+      - dependency-name: django
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 14 }
+    groups:
+      frontend-minor:
+        update-types: [minor, patch]
+    commit-message: { prefix: "chore(deps)" }
+    ignore:
+      # Ionic 9, react-router 6 and React 19 only work together: one migration of its own, not
+      # separate PRs (each one alone fails). Minor and patch versions keep coming.
+      - dependency-name: "@ionic/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@ionic/react-router"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-router"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-router-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-router"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-router-dom"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 waits until typescript-eslint supports it (8.72 accepts < 6.1): a planned
+      # upgrade, not a weekly one.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    cooldown: { default-days: 14 }
+    commit-message: { prefix: "chore(ci)" }
+
+  - package-ecosystem: docker
+    directories: [/backend, /frontend]
+    schedule: { interval: monthly }
+    cooldown: { default-days: 14 }
+    commit-message: { prefix: "chore(docker)" }
+    ignore:
+      # Python and Node change at once in the image, the CI and Render (and the lock, for Python):
+      # only their patch versions come here.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      # nginx: odd minor versions are its development branch. The next stable one (1.32, spring
+      # 2027) is updated by hand.
+      - dependency-name: nginxinc/nginx-unprivileged
+        update-types: ["version-update:semver-minor"]
+
+  # PostgreSQL of docker-compose.yml and docker-compose.prod.yml (pinned by digest too).
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: monthly }
+    cooldown: { default-days: 14 }
+    commit-message: { prefix: "chore(docker)" }
+    ignore:
+      # PostgreSQL stays on 16, like Render's database and the image's pg_dump: a new major version is a
+      # planned migration (pg_upgrade), not a dependency update.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]

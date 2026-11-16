@@ -1,0 +1,61 @@
+# Production-like stack on one machine: gunicorn + whitenoise behind nginx (http://localhost:8080).
+#   docker compose -f docker-compose.prod.yml up --build
+# Not for a real deployment: no TLS, local media volume (use GCS + Render, see README).
+services:
+  db:
+    image: postgres:16.15@sha256:933463a6c8eba2b9f5cd414138738cd8d5519cd2c471214c222652f547a66a32
+    environment:
+      POSTGRES_DB: entrenanutricion
+      POSTGRES_USER: entrenanutricion
+      # Its own password (from .env or the shell), like the secret key: none is published here.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a random value}
+    volumes:
+      - pgdata-prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U entrenanutricion -d entrenanutricion"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      target: prod
+    environment:
+      # Its own random key (from .env or the shell): production refuses missing or published ones.
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY to a long random value}
+      DATABASE_URL: postgres://entrenanutricion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/entrenanutricion
+      ALLOWED_HOSTS: localhost,127.0.0.1,backend
+      CSRF_TRUSTED_ORIGINS: http://localhost:8080
+      # Plain HTTP locally: no HTTPS redirect nor HSTS, media served by Django.
+      SECURE_SSL_REDIRECT: "0"
+      SECURE_HSTS_SECONDS: "0"
+      SERVE_MEDIA: "1"
+      # nginx appends the client address to X-Forwarded-For.
+      NUM_PROXIES: "1"
+      # No SMTP here: the emails go to the container log, on purpose (refused otherwise).
+      EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+      ALLOW_CONSOLE_EMAIL: "1"
+    # Port, workers and access log: backend/gunicorn.conf.py.
+    command: sh -c "python manage.py migrate --noinput && gunicorn config.wsgi:application"
+    volumes:
+      - media-prod:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+      args:
+        VITE_API_URL: /api/v1
+    # Only on this machine (plain HTTP, local replica).
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata-prod:
+  media-prod:

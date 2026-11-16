@@ -1,0 +1,33 @@
+# Checks the deployed app every 15 minutes. Set the repository variables HEALTHCHECK_URL
+# (https://<api>/api/v1/health) and WEB_URL (https://<web>/). A failed scheduled run makes GitHub
+# email the people watching the repository; Sentry covers application errors.
+name: Uptime
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    if: vars.HEALTHCHECK_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: API and database answer
+        env:
+          URL: ${{ vars.HEALTHCHECK_URL }}
+        run: |
+          for attempt in 1 2 3; do
+            if curl -fsS --max-time 20 "$URL" | grep -q '"database":"ok"'; then exit 0; fi
+            sleep 30
+          done
+          echo "::error::$URL did not answer with a healthy database"
+          exit 1
+      - name: Web app is served
+        if: vars.WEB_URL != ''
+        env:
+          URL: ${{ vars.WEB_URL }}
+        run: curl -fsS --max-time 20 "$URL" | grep -q 'id="root"'

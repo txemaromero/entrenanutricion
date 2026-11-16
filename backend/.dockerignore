@@ -1,0 +1,20 @@
+# Never in an image: secrets, the repository history, local data and what only tests need
+# (docker compose mounts the code for development and tests).
+.env
+.env.*
+*.pem
+*.key
+gcs-credentials*.json
+**/.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+tests
+media
+staticfiles
+backups
+*.dump

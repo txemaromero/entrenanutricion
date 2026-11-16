@@ -1,0 +1,20 @@
+# Direct runtime dependencies (exact versions). requirements.txt is the lock generated from this
+# file, with every transitive dependency and the hashes of their files (pip --require-hashes):
+#   uv pip compile requirements.in --universal --python-version 3.12 --generate-hashes -o requirements.txt
+Django==5.2.18
+djangorestframework==3.18.3
+djangorestframework-simplejwt==5.5.1
+django-filter==26.2
+django-cors-headers==4.9.0
+drf-spectacular==0.30.0
+django-storages[google]==1.14.6
+Pillow==13.0.0
+gunicorn==26.2.0
+whitenoise==6.12.0
+psycopg[binary]==3.3.6
+dj-database-url==3.1.2
+argon2-cffi==25.1.0
+sentry-sdk==2.73.0
+# Needed only on Windows (Django's time zones), listed so that every lock has it: Dependabot
+# regenerates the locks for Linux only, and --require-hashes refuses anything missing from them.
+tzdata==2026.6

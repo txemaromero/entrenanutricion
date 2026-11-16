@@ -1,0 +1,14 @@
+# Never in an image: secrets, the repository history, local builds and what only tests need
+# (docker compose mounts the code for development and tests).
+.env
+.env.*
+*.pem
+*.key
+**/.git
+node_modules
+dist
+coverage
+test-results
+playwright-report
+e2e
+tests
